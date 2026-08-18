@@ -419,8 +419,6 @@ Placeholders:
 - `<kubernetes_namespace>`: Kubernetes namespace where the Collector pod runs.
 - `<service_account_name>`: Kubernetes service account used by the Collector pod.
 - `<oke_cluster_ocid>`: OCID of the enhanced OKE cluster that runs the Collector pod.
-- `<oke_cluster_compartment_ocid>`: OCID of the compartment that contains the enhanced OKE cluster.
-- `<oke_cluster_admin_group>`: IAM group whose administrators create and manage OKE workload mappings.
 
 ### Config file based authentication (`auth_type: config_file`)
 
@@ -543,27 +541,7 @@ namespace, and service account, as shown above. See
 [Granting Workloads Access to OCI Resources](https://docs.oracle.com/en-us/iaas/Content/ContEng/Tasks/contenggrantingworkloadaccesstoresources.htm).
 
 If the OKE cluster and the target Log Analytics log group are in different
-compartments, grant the OKE cluster administrators permission to manage workload
-mappings and to bind the cluster workloads to the target compartment:
-
-```text
-Allow group <oke_cluster_admin_group> to manage cluster-workload-mappings in compartment id <oke_cluster_compartment_ocid>
-Allow group <oke_cluster_admin_group> to {CLUSTER_WORKLOAD_COMPARTMENT_BIND, CLUSTER_WORKLOAD_COMPARTMENT_UNBIND} in compartment id <log_group_compartment_ocid>
-```
-
-Then create a workload mapping from the Collector's Kubernetes namespace to the
-compartment that contains the Log Analytics log group:
-
-```bash
-oci ce workload-mapping create \
-  --cluster-id <oke_cluster_ocid> \
-  --namespace <kubernetes_namespace> \
-  --mapped-compartment-id <log_group_compartment_ocid>
-```
-
-The workload mapping applies to all service accounts in the mapped Kubernetes
-namespace. Keep the upload policy restricted to the Collector's service account
-as shown above. For more information, see
+compartments, configure an OKE workload mapping before using the exporter. See
 [Granting Workloads Access to OCI Resources](https://docs.oracle.com/en-us/iaas/Content/ContEng/Tasks/contenggrantingworkloadaccesstoresources.htm#Example__Using_the_Java_SDK_to_Grant_Application_Workloads_Access_to_OCI_Resources_in_a_Different_Compartment).
 
 ### Service policy prerequisite (tenancy-level)
