@@ -15,12 +15,19 @@ this exporter.
 
 To use this exporter, you need:
 
-- Go version compatible with the OpenTelemetry Collector version you are building.
+- Go `1.25.12` or later for exporter and Collector version `v0.156.0`.
 - OpenTelemetry Collector Builder (`ocb`) for your target Collector version.
 - Access to OCI Log Analytics.
 - An OCI Log Analytics namespace.
 - An OCI Log Analytics log group OCID.
-- OCI credentials for either config file authentication or instance principal authentication.
+- One of the following OCI authentication environments:
+  - OCI configuration-file credentials.
+  - An OCI Compute instance covered by an IAM dynamic group and policy for
+    instance principal authentication.
+  - An OCI service runtime that supplies standard OCI Resource Principal
+    credentials and is covered by the required IAM policy.
+  - An enhanced OKE cluster with a Kubernetes service account and IAM policy
+    for OKE Workload Identity authentication.
 
 ## Version Compatibility
 
@@ -29,12 +36,12 @@ OpenTelemetry Collector/Contrib version used to build your custom collector.
 
 | Oracle Observability Exporter | OpenTelemetry Collector/Contrib |
 | --- | --- |
-| `v0.153.x` | `v0.153.0` |
+| `v0.156.x` | `v0.156.0` |
 
 Because this exporter is published as a Go module in the
 `oracleobservabilityexporter` folder, repository tags use the submodule tag
-format, for example `oracleobservabilityexporter/v0.153.0`. In an OCB manifest,
-use only the module version, for example `v0.153.0`.
+format, for example `oracleobservabilityexporter/v0.156.0`. In an OCB manifest,
+use only the module version, for example `v0.156.0`.
 
 ## Quick Start
 
@@ -59,6 +66,8 @@ it does not publish a pre-built Collector binary.
 - Supports OCI authentication using:
   - `config_file`
   - `instance_principal`
+  - `workload_identity`
+  - `resource_principal`
 - Supports OCI config in two ways when using `config_file`:
   - `oci_config_file_path` (+ optional `config_profile`)
   - inline `oci_config` object
@@ -70,7 +79,8 @@ it does not publish a pre-built Collector binary.
 
 - `namespace`: OCI Log Analytics namespace.
 - `log_group_id`: OCI Log Group OCID (used for authorization and routing).
-- `auth_type`: `config_file` or `instance_principal`.
+- `auth_type`: `config_file`, `instance_principal`, `workload_identity`, or
+  `resource_principal`.
 
 ### Required Collector Extension
 
@@ -103,7 +113,49 @@ If both `oci_config_file_path` and `oci_config` are set, `oci_config` is used.
 #### 2. `auth_type: instance_principal`
 
 - Runs with OCI instance principal credentials.
-- Do **not** set `oci_config` with this mode.
+- Do **not** set `oci_config`, `oci_config_file_path`, `config_profile`, or
+  `private_key_passphrase` with this mode.
+
+#### 3. `auth_type: workload_identity`
+
+- Runs with OKE Workload Identity credentials.
+- Use this mode when the Collector runs in an enhanced OKE cluster, including
+  OKE Virtual Nodes where instance principal authentication is not supported.
+- Do **not** set `oci_config`, `oci_config_file_path`, `config_profile`, or
+  `private_key_passphrase` with this mode.
+- Kubernetes namespace, Kubernetes service account, and OKE cluster OCID are
+  not exporter configuration fields. OCI derives those values from the running
+  pod and uses them in IAM policy conditions.
+- Set the OCI SDK Workload Identity environment variables on the Collector
+  container:
+  - `OCI_RESOURCE_PRINCIPAL_VERSION=2.2`
+  - `OCI_RESOURCE_PRINCIPAL_REGION=<oci-region>`
+
+#### 4. `auth_type: resource_principal`
+
+- Runs with OCI Resource Principal credentials supplied through the standard
+  OCI SDK environment contract.
+- Do **not** set `oci_config`, `oci_config_file_path`, `config_profile`, or
+  `private_key_passphrase` with this mode.
+- The exporter uses the OCI Go SDK Resource Principal provider. It does not
+  mint credentials or implement custom request signing.
+
+For file-backed Resource Principal version 2.2, the hosting runtime supplies
+environment variables such as:
+
+```text
+OCI_RESOURCE_PRINCIPAL_VERSION=2.2
+OCI_RESOURCE_PRINCIPAL_RPST=<path_to_rpst_file>
+OCI_RESOURCE_PRINCIPAL_PRIVATE_PEM=<path_to_private_key_file>
+OCI_RESOURCE_PRINCIPAL_PRIVATE_PEM_PASSPHRASE=<optional_path_or_value>
+OCI_RESOURCE_PRINCIPAL_REGION=<oci-region>
+```
+
+For credential refresh without restarting the Collector, supply the RPST and
+private key as file paths and refresh those files in place. The OCI Go SDK
+rereads file-backed credential material when the cached token is no longer
+valid. The hosting OCI service is responsible for supplying and rotating these
+files.
 
 ### Exporter Helper Fields
 
@@ -199,6 +251,12 @@ service:
 Replace only the `exporters.oracleobservability` block from the full example
 above:
 
+Do not commit private keys or private-key passphrases to source control. Inject
+these values through your deployment's secret-management mechanism. When the
+Collector runs in a supported OCI environment, prefer instance principal,
+workload identity, or resource principal authentication so that a private API
+signing key is not included in the Collector configuration.
+
 ```yaml
 exporters:
   oracleobservability:
@@ -225,6 +283,33 @@ above:
 exporters:
   oracleobservability:
     auth_type: instance_principal
+    namespace: "<oci-loganalytics-namespace>"
+    log_group_id: "ocid1.loganalyticsloggroup.oc1..<unique_id>"
+```
+
+### D) OKE Workload Identity authentication
+
+Replace only the `exporters.oracleobservability` block from the full example
+above:
+
+```yaml
+exporters:
+  oracleobservability:
+    auth_type: workload_identity
+    namespace: "<oci-loganalytics-namespace>"
+    log_group_id: "ocid1.loganalyticsloggroup.oc1..<unique_id>"
+```
+
+### E) Resource principal authentication
+
+Replace only the `exporters.oracleobservability` block from the full example
+above. The Resource Principal environment variables must be available to the
+Collector process.
+
+```yaml
+exporters:
+  oracleobservability:
+    auth_type: resource_principal
     namespace: "<oci-loganalytics-namespace>"
     log_group_id: "ocid1.loganalyticsloggroup.oc1..<unique_id>"
 ```
@@ -314,30 +399,30 @@ dist:
   output_path: ./_build
 
 exporters:
-  - gomod: github.com/oracle-samples/otel-collector-exporter-oracleobservability/oracleobservabilityexporter v0.153.0
+  - gomod: github.com/oracle-samples/otel-collector-exporter-oracleobservability/oracleobservabilityexporter v0.156.0
 
 receivers:
-  - gomod: go.opentelemetry.io/collector/receiver/otlpreceiver v0.153.0
+  - gomod: go.opentelemetry.io/collector/receiver/otlpreceiver v0.156.0
 
 processors:
-  - gomod: go.opentelemetry.io/collector/processor/batchprocessor v0.153.0
-  - gomod: go.opentelemetry.io/collector/processor/memorylimiterprocessor v0.153.0
+  - gomod: go.opentelemetry.io/collector/processor/batchprocessor v0.156.0
+  - gomod: go.opentelemetry.io/collector/processor/memorylimiterprocessor v0.156.0
 
 extensions:
-  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/extension/storage/filestorage v0.153.0
-  - gomod: go.opentelemetry.io/collector/extension/zpagesextension v0.153.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/extension/storage/filestorage v0.156.0
 
 providers:
-  - gomod: go.opentelemetry.io/collector/confmap/provider/envprovider v1.59.0
-  - gomod: go.opentelemetry.io/collector/confmap/provider/fileprovider v1.59.0
-  - gomod: go.opentelemetry.io/collector/confmap/provider/yamlprovider v1.59.0
+  - gomod: go.opentelemetry.io/collector/confmap/provider/envprovider v1.62.0
+  - gomod: go.opentelemetry.io/collector/confmap/provider/fileprovider v1.62.0
+  - gomod: go.opentelemetry.io/collector/confmap/provider/yamlprovider v1.62.0
 ```
 
 ### 2. Build the binary
 
 ```bash
-go install go.opentelemetry.io/collector/cmd/builder@v0.153.0
-builder --config builder-config.yaml
+mkdir -p .bin
+GOBIN="$PWD/.bin" go install go.opentelemetry.io/collector/cmd/builder@v0.156.0
+./.bin/builder --config builder-config.yaml
 ```
 
 ### 3. Run your custom collector
@@ -375,6 +460,13 @@ Placeholders:
 - `<otel_config_file_user_group>`: IAM group containing the user whose OCI config file or inline `oci_config` is used by the exporter.
 - `<instance_ocid>`: OCID of the OCI Compute instance that runs the collector with `auth_type: instance_principal`.
 - `otel-exporter-instance-ppl`: dynamic group containing OCI Compute instances that run the exporter with instance principal authentication.
+- `<resource_dynamic_group>`: dynamic group containing the OCI resource whose
+  hosting service supplies Resource Principal credentials to the Collector.
+- `<kubernetes_namespace>`: Kubernetes namespace where the Collector pod runs.
+- `<service_account_name>`: Kubernetes service account used by the Collector pod.
+- `<oke_cluster_ocid>`: OCID of the enhanced OKE cluster that runs the Collector pod.
+- `<oke_cluster_compartment_ocid>`: OCID of the compartment that contains the enhanced OKE cluster.
+- `<oke_cluster_admin_group>`: IAM group whose administrators create and manage OKE workload mappings.
 
 ### Config file based authentication (`auth_type: config_file`)
 
@@ -428,6 +520,115 @@ allow dynamic-group otel-exporter-instance-ppl to {LOG_ANALYTICS_LOG_GROUP_UPLOA
 
 If the exporter will run on multiple instances, prefer a tag-based or compartment-based dynamic group rule instead of adding each instance OCID manually.
 
+### OKE Workload Identity authentication (`auth_type: workload_identity`)
+
+Use this when the exporter runs in an enhanced OKE cluster and signs requests as
+the workload identity of the Collector pod. This is the recommended mode for
+OKE Virtual Nodes because instance principal authentication is not supported
+there.
+
+OKE prerequisites:
+
+- Use an enhanced OKE cluster.
+- Create or choose a Kubernetes service account for the Collector.
+- Run the Collector pod in the Kubernetes namespace and service account named
+  in the IAM policy.
+- Set `automountServiceAccountToken: true` on the pod spec.
+- Set `OCI_RESOURCE_PRINCIPAL_VERSION=2.2` and
+  `OCI_RESOURCE_PRINCIPAL_REGION=<oci-region>` on the Collector container.
+- Do not configure `oci_config`, `oci_config_file_path`, `config_profile`, or
+  `private_key_passphrase` for this exporter auth mode.
+
+Collector pod identity example:
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-collector
+  namespace: <kubernetes_namespace>
+spec:
+  selector:
+    matchLabels:
+      app: otel-collector
+  template:
+    metadata:
+      labels:
+        app: otel-collector
+    spec:
+      serviceAccountName: <service_account_name>
+      automountServiceAccountToken: true
+      containers:
+        - name: otel-collector
+          image: "<custom_collector_image>"
+          env:
+            - name: OCI_RESOURCE_PRINCIPAL_VERSION
+              value: "2.2"
+            - name: OCI_RESOURCE_PRINCIPAL_REGION
+              value: "<oci-region>"
+```
+
+Configure these values in the Kubernetes Deployment, not in the
+`exporters.oracleobservability` block. The OCI Go SDK uses these environment
+variables while creating the OKE Workload Identity signer.
+
+Recommended least-privilege upload policy:
+
+```text
+Allow any-user to {LOG_ANALYTICS_LOG_GROUP_UPLOAD_LOGS} in compartment id <log_group_compartment_ocid> where all {
+  request.principal.type = 'workload',
+  request.principal.namespace = '<kubernetes_namespace>',
+  request.principal.service_account = '<service_account_name>',
+  request.principal.cluster_id = '<oke_cluster_ocid>'
+}
+```
+
+OKE workload identities cannot be added to dynamic groups. Grant access using
+an `Allow any-user` policy restricted by the workload's OKE cluster, Kubernetes
+namespace, and service account, as shown above. See
+[Granting Workloads Access to OCI Resources](https://docs.oracle.com/en-us/iaas/Content/ContEng/Tasks/contenggrantingworkloadaccesstoresources.htm).
+
+If the OKE cluster and the target Log Analytics log group are in different
+compartments, grant the OKE cluster administrators permission to manage workload
+mappings and to bind the cluster workloads to the target compartment:
+
+```text
+Allow group <oke_cluster_admin_group> to manage cluster-workload-mappings in compartment id <oke_cluster_compartment_ocid>
+Allow group <oke_cluster_admin_group> to {CLUSTER_WORKLOAD_COMPARTMENT_BIND, CLUSTER_WORKLOAD_COMPARTMENT_UNBIND} in compartment id <log_group_compartment_ocid>
+```
+
+Then create a workload mapping from the Collector's Kubernetes namespace to the
+compartment that contains the Log Analytics log group:
+
+```bash
+oci ce workload-mapping create \
+  --cluster-id <oke_cluster_ocid> \
+  --namespace <kubernetes_namespace> \
+  --mapped-compartment-id <log_group_compartment_ocid>
+```
+
+The workload mapping applies to all service accounts in the mapped Kubernetes
+namespace. Keep the upload policy restricted to the Collector's service account
+as shown above. For more information, see
+[Granting Workloads Access to OCI Resources](https://docs.oracle.com/en-us/iaas/Content/ContEng/Tasks/contenggrantingworkloadaccesstoresources.htm#Example__Using_the_Java_SDK_to_Grant_Application_Workloads_Access_to_OCI_Resources_in_a_Different_Compartment).
+
+### Resource principal authentication (`auth_type: resource_principal`)
+
+Use this when the hosting OCI service supplies standard Resource Principal
+credentials to the Collector runtime. The OCI resource must be included in a
+dynamic group and granted permission to upload to the destination Log Analytics
+log group.
+
+Recommended least-privilege upload policy:
+
+```text
+allow dynamic-group <resource_dynamic_group> to {LOG_ANALYTICS_LOG_GROUP_UPLOAD_LOGS} in compartment id <log_group_compartment_ocid>
+```
+
+The hosting service is responsible for supplying and refreshing the Resource
+Principal credential material. The exporter uses the OCI SDK provider and does
+not fall back to another authentication type.
+
 ### Service policy prerequisite (tenancy-level)
 
 ```text
@@ -440,18 +641,27 @@ Notes:
 - If multiple compartments are used, repeat statements per compartment or use a broader compartment/tenancy scope only if required.
 - For `config_file`, the policy subject is the IAM group that contains the OCI user, not the config file itself.
 - For `instance_principal`, allow time for dynamic group and policy changes to propagate before testing ingestion.
+- For `workload_identity`, allow time for OKE workload identity and IAM policy changes to propagate before testing ingestion.
+- For `resource_principal`, confirm that the hosting service supplies the
+  required environment variables and that its resource matches the dynamic
+  group before testing ingestion.
 - References:
   - OCI Log Analytics OpenTelemetry upload API: https://docs.oracle.com/en-us/iaas/log-analytics/doc/upload-opentelemetry-logs.html
   - OCI Log Analytics IAM policy details: https://docs.oracle.com/en-us/iaas/log-analytics/doc/iam-policies-upload-open-telemetry-logs.html
   - Log Analytics policy overview: https://docs.oracle.com/en-us/iaas/log-analytics/doc/required-iam-policy.html
   - OCI dynamic groups: https://docs.oracle.com/en-us/iaas/Content/Identity/Tasks/managingdynamicgroups.htm
   - OCI instance principals and dynamic group policies: https://docs.oracle.com/en-us/iaas/Content/Identity/Tasks/callingservicesfrominstances.htm
+  - OKE Workload Identity: https://docs.oracle.com/en-us/iaas/Content/ContEng/Tasks/contenggrantingworkloadaccesstoresources.htm
+  - OCI SDK authentication methods: https://docs.oracle.com/en-us/iaas/Content/API/Concepts/sdk_authentication_methods.htm
 
 ## Recommendations
 
 - Use `memory_limiter` and `batch` processors in the logs pipeline.
 - Start with queue enabled and monitor backpressure.
-- Use `instance_principal` when running collector inside OCI compute/container environments.
+- Use `instance_principal` when running the Collector on OCI Compute.
+- Use `workload_identity` when running the Collector in OKE, especially on OKE Virtual Nodes.
+- Use `resource_principal` when the hosting OCI service supplies and rotates
+  standard Resource Principal credentials.
 - Monitor Collector logs and OCI Log Analytics ingestion status during rollout.
 
 ## Documentation
