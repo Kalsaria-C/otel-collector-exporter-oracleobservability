@@ -15,7 +15,7 @@ this exporter.
 
 To use this exporter, you need:
 
-- Go `1.25.12` or later for exporter and Collector version `v0.155.0`.
+- Go `1.25.13` or later for exporter and Collector version `v0.155.0`.
 - OpenTelemetry Collector Builder (`ocb`) for your target Collector version.
 - Access to OCI Log Analytics.
 - An OCI Log Analytics namespace.
