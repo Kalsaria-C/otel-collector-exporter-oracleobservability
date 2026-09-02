@@ -15,13 +15,13 @@ coverage.html
 
 # Local collector configs and Go workspaces.
 /config.yaml
+/otel-collector-wi-test.yaml
 
 # Local notes and helper scripts.
 /LOCAL_COMMANDS.md
 /build-otelcol-artifacts.sh
 /RESOURCE_PRINCIPAL_TEST_PLAN.md
 /WORKLOAD_IDENTITY_TEST.md
-/otel-collector-wi-test.yaml
 
 # OS and editor files.
 .DS_Store
