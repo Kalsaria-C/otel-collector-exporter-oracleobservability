@@ -11,6 +11,11 @@ this exporter.
 - Stability: `stable`
 - Go module path: `github.com/oracle-samples/otel-collector-exporter-oracleobservability/oracleobservabilityexporter`
 
+> [!IMPORTANT]
+> Exporter version `v0.156.0-dev.1` is a development preview for testing the
+> Resource Principal authentication changes. Use `v0.155.x` for the current
+> stable release line.
+
 ## Prerequisites
 
 To use this exporter, you need:
@@ -34,14 +39,15 @@ To use this exporter, you need:
 Use the table below to choose the Oracle Observability Exporter version for the
 OpenTelemetry Collector/Contrib version used to build your custom collector.
 
-| Oracle Observability Exporter | OpenTelemetry Collector/Contrib |
-| --- | --- |
-| `v0.156.x` | `v0.156.0` |
+| Oracle Observability Exporter | OpenTelemetry Collector/Contrib | Status |
+| --- | --- | --- |
+| `v0.156.0-dev.1` | `v0.156.0` | Development preview |
+| `v0.155.x` | `v0.155.0` | Stable |
 
 Because this exporter is published as a Go module in the
 `oracleobservabilityexporter` folder, repository tags use the submodule tag
-format, for example `oracleobservabilityexporter/v0.156.0`. In an OCB manifest,
-use only the module version, for example `v0.156.0`.
+format, for example `oracleobservabilityexporter/v0.156.0-dev.1`. In an OCB
+manifest, use only the module version, for example `v0.156.0-dev.1`.
 
 ## Quick Start
 
@@ -399,7 +405,7 @@ dist:
   output_path: ./_build
 
 exporters:
-  - gomod: github.com/oracle-samples/otel-collector-exporter-oracleobservability/oracleobservabilityexporter v0.156.0
+  - gomod: github.com/oracle-samples/otel-collector-exporter-oracleobservability/oracleobservabilityexporter v0.156.0-dev.1
 
 receivers:
   - gomod: go.opentelemetry.io/collector/receiver/otlpreceiver v0.156.0
