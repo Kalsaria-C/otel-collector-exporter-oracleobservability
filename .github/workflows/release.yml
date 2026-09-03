@@ -139,7 +139,7 @@ jobs:
 
       - name: Build custom collector from remote exporter
         env:
-          GOPROXY: direct
+          GOPROXY: https://proxy.golang.org,direct
           GONOSUMDB: github.com/oracle-samples/otel-collector-exporter-oracleobservability/oracleobservabilityexporter
           GOMODCACHE: ${{ runner.temp }}/remote-module-cache
         run: |
