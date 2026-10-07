@@ -8,6 +8,8 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
+	"strings"
 
 	oci_common "github.com/oracle/oci-go-sdk/v65/common"
 	"github.com/oracle/oci-go-sdk/v65/common/auth"
@@ -49,11 +51,15 @@ func defaultOracleObservabilityWorker(
 	cfg *Config,
 	ociClient loganalytics.LogAnalyticsClient,
 ) oracleobservabilityWorker {
+	var client MinimalLogAnalyticsClient = ociClient
+	if cfg.AuthType == ResourcePrincipal && usesFileResourcePrincipal() {
+		client = newRefreshingResourcePrincipalClient(ociClient)
+	}
 	return &defaultWorker{
 		ctx:                ctx,
 		logger:             logger,
 		config:             cfg,
-		logAnalyticsClient: ociClient,
+		logAnalyticsClient: client,
 	}
 }
 
@@ -177,6 +183,19 @@ func initializeOciLogAnalyticsClient(authType AuthenticationType, ociConfigurati
 
 	case ResourcePrincipal:
 		configProvider, err = auth.ResourcePrincipalConfigurationProvider()
+		if err == nil && strings.TrimSpace(os.Getenv("OCI_RESOURCE_PRINCIPAL_REGION")) == "" {
+			err = fmt.Errorf("can not create resource principal, environment variable: OCI_RESOURCE_PRINCIPAL_REGION, must not be empty or whitespace")
+		}
+		if err == nil {
+			var region string
+			region, err = configProvider.Region()
+			if err == nil {
+				_, err = oci_common.StringToRegion(region).RealmID()
+				if err != nil {
+					err = fmt.Errorf("can not create resource principal, environment variable: OCI_RESOURCE_PRINCIPAL_REGION, must identify a region recognized by the OCI SDK; correct the region or configure OCI SDK region metadata for a new or custom region")
+				}
+			}
+		}
 
 	case WorkloadIdentity:
 		configProvider, err = auth.OkeWorkloadIdentityConfigurationProvider()

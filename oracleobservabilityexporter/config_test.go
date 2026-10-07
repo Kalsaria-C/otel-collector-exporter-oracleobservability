@@ -15,8 +15,8 @@ import (
 	"go.opentelemetry.io/collector/config/configopaque"
 	"go.opentelemetry.io/collector/config/configoptional"
 	"go.opentelemetry.io/collector/config/configretry"
+	"go.opentelemetry.io/collector/confmap"
 	"go.opentelemetry.io/collector/confmap/confmaptest"
-	"go.opentelemetry.io/collector/confmap/xconfmap"
 	"go.opentelemetry.io/collector/exporter/exporterhelper"
 )
 
@@ -42,11 +42,12 @@ func TestLoadConfig(t *testing.T) {
 	require.NoError(t, sub.Unmarshal(cfg))
 
 	// Validate that the configuration is correct
-	assert.NoError(t, xconfmap.Validate(cfg))
+	assert.NoError(t, confmap.Validate(cfg))
 
+	storageID := component.MustNewID("file_storage")
 	expected := &Config{
 		TimeoutConfig:  exporterhelper.TimeoutConfig{Timeout: 0},
-		QueueConfig:    configoptional.Some(exporterhelper.QueueBatchConfig{NumConsumers: 10, QueueSize: 1000, BlockOnOverflow: true, WaitForResult: false, Sizer: exporterhelper.RequestSizerTypeRequests}),
+		QueueConfig:    configoptional.Some(exporterhelper.QueueBatchConfig{StorageID: &storageID, NumConsumers: 10, QueueSize: 1000, BlockOnOverflow: true, WaitForResult: false, Sizer: exporterhelper.RequestSizerTypeRequests}),
 		BackOffConfig:  configretry.BackOffConfig{Enabled: true, InitialInterval: 5 * time.Second, RandomizationFactor: 0.5, Multiplier: 1.5, MaxInterval: 30 * time.Second, MaxElapsedTime: 0},
 		AuthType:       "config_file",
 		NamespaceName:  "example-namespace",
