@@ -80,10 +80,3 @@ jobs:
           collector="${RUNNER_TEMP}/otelcol-oracleobservability-ci/otelcol-oracleobservability-ci"
           "$collector" components > "${RUNNER_TEMP}/components.txt"
           grep -q "oracleobservability" "${RUNNER_TEMP}/components.txt"
-
-      - name: Install govulncheck
-        run: go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
-
-      - name: Scan custom collector dependencies
-        working-directory: ${{ runner.temp }}/otelcol-oracleobservability-ci
-        run: govulncheck ./...

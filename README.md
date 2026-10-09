@@ -19,6 +19,7 @@ use these versions.
 
 - [Prerequisites](#prerequisites)
 - [Version Compatibility](#version-compatibility)
+- [Breaking Changes and Migration](#breaking-changes-and-migration)
 - [Quick Start](#quick-start)
 - [Installation](#installation)
 - [What This Exporter Does](#what-this-exporter-does)
@@ -67,13 +68,85 @@ OpenTelemetry Collector/Contrib version used to build your custom collector.
 | --- | --- | --- |
 | `v0.162.0` | `v0.162.0` | Stable |
 | `v0.156.0-dev.1` | `v0.156.0` | Development |
-| `v0.155.x` | `v0.155.0` | Stable |
-| `v0.153.x` | `v0.153.0` | Stable |
+| `v0.155.0` | `v0.155.0` | Stable |
+| `v0.153.0` | `v0.153.0` | Stable |
 
 Because this exporter is published as a Go module in the
 `oracleobservabilityexporter` folder, repository tags use the submodule tag
 format, for example `oracleobservabilityexporter/v0.162.0`. In an OCB
 manifest, use only the module version, for example `v0.162.0`.
+
+## Breaking Changes and Migration
+
+### v0.162.0: Persistent Queue Enabled by Default
+
+This release changes the default sending queue from in-memory storage to
+`file_storage`. This is a breaking configuration change: a configuration that
+previously omitted queue storage can fail to start after upgrading unless the
+storage extension is included in the binary, configured, and enabled.
+
+#### Migrate to Persistent Storage
+
+1. Include the storage extension in your OCB manifest and rebuild the Collector:
+
+   ```yaml
+   extensions:
+     - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/extension/storage/filestorage v0.162.0
+   ```
+
+2. Choose a writable storage directory. For containers, mount persistent storage
+   at that path and ensure the Collector's runtime user can write to it. Retain
+   the same storage across restarts if queued logs must survive them.
+3. Merge the following into your existing Collector configuration. Replace
+   `<path_to_storage>` with your chosen directory; retain your authentication,
+   destination, pipeline settings, and any other enabled extensions:
+
+   ```yaml
+   extensions:
+     file_storage:
+       directory: <path_to_storage>
+
+   exporters:
+     oracleobservability:
+       # Keep your existing authentication and destination settings.
+       sending_queue:
+         storage: file_storage
+
+   service:
+     extensions: [file_storage]
+     # Keep your existing pipelines and other enabled extensions.
+   ```
+
+4. Before stopping the old Collector, allow pending logs to finish uploading.
+   Existing in-memory records are not transferred into the new persistent queue.
+5. Validate the updated configuration with the new binary, then start it and
+   verify ingestion. Monitor available space on the storage filesystem:
+
+   ```bash
+   ./otelcol-dev validate --config=config.yaml
+   ./otelcol-dev --config=config.yaml
+   ```
+
+Use your actual binary name and configuration path. If you already configure
+persistent storage explicitly, keep its extension ID, directory, and mount;
+verify that the extension is included and enabled in the upgraded Collector.
+
+#### Run Without a Sending Queue
+
+If you intentionally do not want queue storage, explicitly disable the sending
+queue under your existing exporter configuration:
+
+```yaml
+exporters:
+  oracleobservability:
+    # Keep your existing authentication and destination settings.
+    sending_queue:
+      enabled: false
+```
+
+This removes the exporter's queue storage requirement, but also removes sending
+queue buffering. It does not restore the previous in-memory queue behavior.
+Do not remove a storage extension if another component still uses it.
 
 ## Quick Start
 
@@ -122,16 +195,31 @@ Set `auth_type` to `config_file`, `instance_principal`, `workload_identity`, or
 The exporter enables a persistent sending queue backed by `file_storage` by
 default, even when `sending_queue.storage` is omitted. Define the `file_storage`
 extension and include it in `service.extensions`; otherwise, the default queue
-fails to start. If you override the storage extension, define and enable that
-extension instead. Disabling the sending queue removes this storage requirement.
+fails to start. If you set `sending_queue.storage` to a different storage extension
+ID, such as `file_storage/queue`, define that extension under `extensions` and
+include the same ID in `service.extensions`. Disabling the sending queue removes
+this storage requirement.
+
+Provision writable persistent storage for the Collector and mount it at the path
+configured in `file_storage.directory`. Ensure the Collector's runtime user has
+read/write access and that the same storage is available after restarts. For
+Kubernetes, use a suitable persistent volume and mount it into the Collector pod.
+Storage provisioning, capacity, permissions, and monitoring are managed by your
+deployment administrator.
+
+Do not share the same queue files between Collector replicas; provide separate
+storage for each replica. Retain the volume when replacing a pod. Do not use
+`emptyDir` for a queue that must survive pod replacement.
 
 Persistent storage can preserve queued logs across Collector restarts when the
 same storage directory is retained. It requires writable disk space and adds
-disk I/O; it does not guarantee zero loss or exactly-once delivery. Check the
-available space on the disk or persistent volume containing
-`file_storage.directory`, and configure alerts before it becomes full. If that
-storage runs out of space, the Collector can fail to save incoming logs to the
-queue. Do not delete queue files to free space, because they may contain logs
+disk I/O; it does not guarantee zero loss or exactly-once delivery. Monitor
+available disk space on the filesystem containing `file_storage.directory`.
+Use your infrastructure monitoring system to alert when free space falls below
+your chosen threshold, so you can expand storage or reduce incoming traffic
+before writes fail. If that storage runs out of space, the Collector can fail to
+save incoming logs to the queue. Do not delete queue files to free space, because
+they may contain logs
 that have not yet been uploaded.
 
 Exporter retries are enabled by default for retryable upload failures to
@@ -140,8 +228,9 @@ to this Collector to retry rejected requests and requests that time out while
 waiting for acknowledgement. A timeout does not necessarily mean the logs were
 not accepted, so retrying can produce duplicates.
 
-When upgrading from a release that used an in-memory queue by default, add the
-storage extension configuration before starting the upgraded Collector.
+For upgrades from an in-memory default, follow
+[Breaking Changes and Migration](#breaking-changes-and-migration) before starting
+the upgraded Collector.
 
 ### Authentication Fields
 
@@ -186,6 +275,8 @@ If both `oci_config_file_path` and `oci_config` are set, `oci_config` is used.
 
 #### 4. `auth_type: resource_principal`
 
+- This exporter supports Resource Principal version `2.2` only; other versions
+  are outside the supported and tested configuration for this authentication mode.
 - Runs with OCI Resource Principal credentials supplied through the standard
   OCI SDK environment contract.
 - Do **not** set `oci_config`, `oci_config_file_path`, `config_profile`, or
@@ -193,7 +284,7 @@ If both `oci_config_file_path` and `oci_config` are set, `oci_config` is used.
 - The exporter uses the OCI Go SDK Resource Principal provider. It does not
   mint credentials or implement custom request signing.
 
-For file-backed Resource Principal version 2.2, the hosting runtime must supply
+For file-backed Resource Principal credentials, the hosting runtime must supply
 these environment variables to the Collector process. Use absolute file paths
 inside the Collector's runtime environment:
 
@@ -220,8 +311,8 @@ For credential rotation without restarting the Collector:
   matching private key. Provide their file paths through the environment
   variables above, and keep those paths accessible to the Collector.
 - **Exporter:** Uses the OCI SDK to reload file-backed credentials when the
-  cached token expires. For file-backed Resource Principal version 2.2, if an
-  upload call returns HTTP 401, the exporter attempts to reload credentials
+  cached token expires. If an upload call returns HTTP 401, the exporter attempts
+  to reload file-backed credentials
   before the next upload attempt. Successful recovery requires valid, matching
   credentials and the necessary OCI permissions.
 - **Collector operator:** Upload retries are enabled by default
@@ -675,109 +766,11 @@ OKE prerequisites:
 - Do not configure `oci_config`, `oci_config_file_path`, `config_profile`, or
   `private_key_passphrase` for this exporter auth mode.
 
-Collector identity and persistent-storage example:
-
-The namespace and service account must already exist. Use the full Collector
-configuration from [Example Collector Config](#example-collector-config), select
-`auth_type: workload_identity`, and set its storage extension as follows. Keep
-`file_storage` in `service.extensions`:
-
-```yaml
-extensions:
-  file_storage:
-    directory: /var/lib/otelcol/storage
-    create_directory: true
-```
-
-Create a ConfigMap from that complete configuration file (not just the snippet):
-
-```bash
-kubectl -n <kubernetes_namespace> create configmap otel-collector-config \
-  --from-file=config.yaml=/path/to/collector-config.yaml
-```
-
-Create a PersistentVolumeClaim in the same namespace. Replace the storage class
-with one supported by your OKE node type and CSI driver. `10Gi` is an example,
-not a sizing recommendation; choose capacity for your log volume and outage
-buffering requirements:
-
-```yaml
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: otel-collector-storage
-  namespace: <kubernetes_namespace>
-spec:
-  accessModes: [ReadWriteOnce]
-  storageClassName: <storage_class_name>
-  resources:
-    requests:
-      storage: 10Gi
-```
-
-The following single-replica Deployment mounts the configuration read-only and
-the queue volume at the path used above. It assumes the image entrypoint runs
-the Collector. Adjust `fsGroup` for your image and volume permissions; the
-example uses group `10001` to make supported volumes writable by a non-root
-Collector process. See [Kubernetes volume permissions](https://kubernetes.io/docs/tasks/configure-pod-container/security-context/#set-the-security-context-for-a-pod).
-
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: otel-collector
-  namespace: <kubernetes_namespace>
-spec:
-  replicas: 1
-  strategy:
-    type: Recreate
-  selector:
-    matchLabels:
-      app: otel-collector
-  template:
-    metadata:
-      labels:
-        app: otel-collector
-    spec:
-      serviceAccountName: <service_account_name>
-      automountServiceAccountToken: true
-      securityContext:
-        fsGroup: 10001
-      containers:
-        - name: otel-collector
-          image: "<custom_collector_image>"
-          args: ["--config=/etc/otelcol/config.yaml"]
-          volumeMounts:
-            - name: config
-              mountPath: /etc/otelcol
-              readOnly: true
-            - name: queue-storage
-              mountPath: /var/lib/otelcol
-          env:
-            - name: OCI_RESOURCE_PRINCIPAL_VERSION
-              value: "2.2"
-            - name: OCI_RESOURCE_PRINCIPAL_REGION
-              value: "<oci-region>"
-      volumes:
-        - name: config
-          configMap:
-            name: otel-collector-config
-        - name: queue-storage
-          persistentVolumeClaim:
-            claimName: otel-collector-storage
-```
-
-Keep the PVC when replacing the pod so the new Collector can reopen its queue.
-Do not share the same queue files between Collector replicas. This example uses
-`Recreate` to avoid overlapping pods during Deployment updates, with a brief
-interruption during replacement. For multiple replicas, use separate claims
-per replica, for example with a StatefulSet. Do not use `emptyDir` for a queue
-that must survive pod replacement. PVC deletion may also delete its backing
-volume, depending on the reclaim policy; see [Kubernetes persistent volumes](https://kubernetes.io/docs/concepts/storage/persistent-volumes/).
-
-Configure these values in the Kubernetes Deployment, not in the
-`exporters.oracleobservability` block. The OCI Go SDK uses these environment
-variables while creating the OKE Workload Identity signer.
+Configure the pod's `serviceAccountName`, token automount, and environment
+variables in your Kubernetes workload specification, not in the
+`exporters.oracleobservability` block. The OCI Go SDK uses these settings for OKE
+Workload Identity authentication. For Collector storage requirements, see
+[Required Collector Extension](#required-collector-extension).
 
 Recommended least-privilege upload policy:
 
