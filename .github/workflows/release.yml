@@ -38,20 +38,27 @@ jobs:
           fi
 
           version="${GITHUB_REF_NAME#${prefix}}"
-          if [[ ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "Release tags must use ${prefix}vMAJOR.MINOR.PATCH, got ${GITHUB_REF_NAME}"
+          if [[ ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-dev\.[0-9]+)?$ ]]; then
+            echo "Release tags must use ${prefix}vMAJOR.MINOR.PATCH or ${prefix}vMAJOR.MINOR.PATCH-dev.NUMBER, got ${GITHUB_REF_NAME}"
             exit 1
           fi
 
-          major="${version#v}"
+          base_version="${version%%-*}"
+          major="${base_version#v}"
           major="${major%%.*}"
-          minor="$(printf '%s' "$version" | cut -d. -f2)"
+          minor="$(printf '%s' "$base_version" | cut -d. -f2)"
           if [ "$major" != "0" ]; then
             echo "This release workflow currently supports the v0 Collector-aligned release line only."
             exit 1
           fi
 
           expected="v0.${minor}.0"
+          if [[ "$version" == *-dev.* ]]; then
+            prerelease=true
+          else
+            prerelease=false
+          fi
+
           mismatches="$(go -C oracleobservabilityexporter list -m all | awk -v expected="$expected" '$1 ~ /^go\.opentelemetry\.io\/collector\// && $2 ~ /^v0\./ && $2 != expected {print}')"
           if [ -n "$mismatches" ]; then
             echo "Collector v0 module dependencies must match ${expected}:"
@@ -61,6 +68,7 @@ jobs:
           echo "EXPORTER_VERSION=${version}" >> "$GITHUB_ENV"
           echo "COLLECTOR_VERSION=${expected}" >> "$GITHUB_ENV"
           echo "COLLECTOR_VERSION_NO_V=${expected#v}" >> "$GITHUB_ENV"
+          echo "IS_PRERELEASE=${prerelease}" >> "$GITHUB_ENV"
           echo "collector_version=${expected}" >> "$GITHUB_OUTPUT"
 
       - name: Check go mod tidy
@@ -131,7 +139,7 @@ jobs:
 
       - name: Build custom collector from remote exporter
         env:
-          GOPROXY: direct
+          GOPROXY: https://proxy.golang.org,direct
           GONOSUMDB: github.com/oracle-samples/otel-collector-exporter-oracleobservability/oracleobservabilityexporter
           GOMODCACHE: ${{ runner.temp }}/remote-module-cache
         run: |
@@ -174,8 +182,14 @@ jobs:
           This release publishes the exporter Go module only. It does not include pre-built Collector binaries.
           EOF
 
+          release_args=()
+          if [ "${IS_PRERELEASE}" = "true" ]; then
+            release_args+=(--prerelease)
+          fi
+
           gh release create "${GITHUB_REF_NAME}" \
             --repo "${GITHUB_REPOSITORY}" \
             --verify-tag \
             --title "${EXPORTER_VERSION}" \
-            --notes-file "$notes_file"
+            --notes-file "$notes_file" \
+            "${release_args[@]}"
