@@ -19,11 +19,11 @@ use these versions.
 
 - [Prerequisites](#prerequisites)
 - [Version Compatibility](#version-compatibility)
-- [Breaking Changes and Migration](#breaking-changes-and-migration)
 - [Quick Start](#quick-start)
 - [Installation](#installation)
 - [What This Exporter Does](#what-this-exporter-does)
 - [Configuration](#configuration)
+- [Sending Queue Configuration](#sending-queue-configuration)
 - [Authentication Fields](#authentication-fields)
 - [Example Collector Config](#example-collector-config)
 - [Advanced Log Source and Attribute Handling](#advanced-log-source-and-attribute-handling)
@@ -76,78 +76,6 @@ Because this exporter is published as a Go module in the
 format, for example `oracleobservabilityexporter/v0.162.0`. In an OCB
 manifest, use only the module version, for example `v0.162.0`.
 
-## Breaking Changes and Migration
-
-### v0.162.0: Persistent Queue Enabled by Default
-
-This release changes the default sending queue from in-memory storage to
-`file_storage`. This is a breaking configuration change: a configuration that
-previously omitted queue storage can fail to start after upgrading unless the
-storage extension is included in the binary, configured, and enabled.
-
-#### Migrate to Persistent Storage
-
-1. Include the storage extension in your OCB manifest and rebuild the Collector:
-
-   ```yaml
-   extensions:
-     - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/extension/storage/filestorage v0.162.0
-   ```
-
-2. Choose a writable storage directory. For containers, mount persistent storage
-   at that path and ensure the Collector's runtime user can write to it. Retain
-   the same storage across restarts if queued logs must survive them.
-3. Merge the following into your existing Collector configuration. Replace
-   `<path_to_storage>` with your chosen directory; retain your authentication,
-   destination, pipeline settings, and any other enabled extensions:
-
-   ```yaml
-   extensions:
-     file_storage:
-       directory: <path_to_storage>
-
-   exporters:
-     oracleobservability:
-       # Keep your existing authentication and destination settings.
-       sending_queue:
-         storage: file_storage
-
-   service:
-     extensions: [file_storage]
-     # Keep your existing pipelines and other enabled extensions.
-   ```
-
-4. Before stopping the old Collector, allow pending logs to finish uploading.
-   Existing in-memory records are not transferred into the new persistent queue.
-5. Validate the updated configuration with the new binary, then start it and
-   verify ingestion. Monitor available space on the storage filesystem:
-
-   ```bash
-   ./otelcol-dev validate --config=config.yaml
-   ./otelcol-dev --config=config.yaml
-   ```
-
-Use your actual binary name and configuration path. If you already configure
-persistent storage explicitly, keep its extension ID, directory, and mount;
-verify that the extension is included and enabled in the upgraded Collector.
-
-#### Run Without a Sending Queue
-
-If you intentionally do not want queue storage, explicitly disable the sending
-queue under your existing exporter configuration:
-
-```yaml
-exporters:
-  oracleobservability:
-    # Keep your existing authentication and destination settings.
-    sending_queue:
-      enabled: false
-```
-
-This removes the exporter's queue storage requirement, but also removes sending
-queue buffering. It does not restore the previous in-memory queue behavior.
-Do not remove a storage extension if another component still uses it.
-
 ## Quick Start
 
 1. Choose the exporter version from the compatibility table.
@@ -157,7 +85,8 @@ Do not remove a storage extension if another component still uses it.
    - `namespace`
    - `log_group_id`
    - `auth_type`
-   - persistent queue storage using `file_storage`
+   - a [sending queue mode](#sending-queue-configuration): persistent storage using
+     `file_storage` by default, or explicit in-memory buffering
 5. Run the custom Collector with the configuration file shown in [Example Collector Config](#example-collector-config).
 6. Send logs to its OTLP receiver and [verify ingestion](#verify-ingestion).
 
@@ -190,15 +119,45 @@ it does not publish a pre-built Collector binary.
 Set `auth_type` to `config_file`, `instance_principal`, `workload_identity`, or
 `resource_principal`. It defaults to `config_file` when omitted.
 
-### Required Collector Extension
+### Sending Queue Configuration
 
-The exporter enables a persistent sending queue backed by `file_storage` by
-default, even when `sending_queue.storage` is omitted. Define the `file_storage`
-extension and include it in `service.extensions`; otherwise, the default queue
-fails to start. If you set `sending_queue.storage` to a different storage extension
-ID, such as `file_storage/queue`, define that extension under `extensions` and
-include the same ID in `service.extensions`. Disabling the sending queue removes
-this storage requirement.
+The sending queue is enabled by default and uses persistent storage through
+`file_storage`. Choose the queue mode that fits your deployment:
+
+| Setting | Queue behavior | Storage extension required? |
+| --- | --- | --- |
+| `storage` omitted or `storage: file_storage` | Persistent queue (default) | Yes, `file_storage` |
+| `storage: file_storage/new` | Persistent queue using a named extension | Yes, `file_storage/new` |
+| `storage: ""` with the queue enabled | In-memory queue | No |
+| `enabled: false` | No sending queue | No, for this exporter queue |
+
+#### Persistent Queue (Default)
+
+Include the `filestorage` extension in your custom Collector binary. Merge this
+snippet into your Collector configuration, retaining your authentication,
+destination, pipelines, and other enabled extensions:
+
+```yaml
+extensions:
+  file_storage:
+    directory: <path_to_storage>
+
+exporters:
+  oracleobservability:
+    # Keep your existing authentication and destination settings.
+    sending_queue:
+      enabled: true
+      storage: file_storage
+
+service:
+  extensions: [file_storage]
+  # Keep your existing pipelines and other enabled extensions.
+```
+
+The default queue fails to start if `file_storage` is not configured and enabled,
+even when `sending_queue.storage` is omitted.
+For a named extension, use the same full ID in `extensions`,
+`sending_queue.storage`, and `service.extensions`.
 
 Provision writable persistent storage for the Collector and mount it at the path
 configured in `file_storage.directory`. Ensure the Collector's runtime user has
@@ -219,18 +178,49 @@ Use your infrastructure monitoring system to alert when free space falls below
 your chosen threshold, so you can expand storage or reduce incoming traffic
 before writes fail. If that storage runs out of space, the Collector can fail to
 save incoming logs to the queue. Do not delete queue files to free space, because
-they may contain logs
-that have not yet been uploaded.
+they may contain logs that have not yet been uploaded.
+
+#### Opt Into an In-Memory Queue
+
+To retain queue buffering without disk storage, explicitly set `storage: ""`
+under your existing exporter configuration:
+
+```yaml
+exporters:
+  oracleobservability:
+    # Keep your existing authentication and destination settings.
+    sending_queue:
+      enabled: true
+      storage: ""
+```
+
+The queue remains enabled with the configured capacity, consumers, and exporter
+retry settings, but buffered logs are lost when the Collector process exits or
+crashes. No storage extension is needed for this queue. Omitting `storage` still
+selects `file_storage`; use the quoted empty string to opt into memory explicitly.
+
+#### Run Without a Sending Queue
+
+If you intentionally do not want queue storage, explicitly disable the sending
+queue under your existing exporter configuration:
+
+```yaml
+exporters:
+  oracleobservability:
+    # Keep your existing authentication and destination settings.
+    sending_queue:
+      enabled: false
+```
+
+This removes the exporter's queue storage requirement, but also removes sending
+queue buffering. Disabling the queue is different from selecting an in-memory queue.
+Do not remove a storage extension if another component still uses it.
 
 Exporter retries are enabled by default for retryable upload failures to
 OCI. Separately, configure the application or upstream Collector sending logs
 to this Collector to retry rejected requests and requests that time out while
 waiting for acknowledgement. A timeout does not necessarily mean the logs were
 not accepted, so retrying can produce duplicates.
-
-For upgrades from an in-memory default, follow
-[Breaking Changes and Migration](#breaking-changes-and-migration) before starting
-the upgraded Collector.
 
 ### Authentication Fields
 
@@ -770,7 +760,7 @@ Configure the pod's `serviceAccountName`, token automount, and environment
 variables in your Kubernetes workload specification, not in the
 `exporters.oracleobservability` block. The OCI Go SDK uses these settings for OKE
 Workload Identity authentication. For Collector storage requirements, see
-[Required Collector Extension](#required-collector-extension).
+[Required Collector Extension](#persistent-queue-default).
 
 Recommended least-privilege upload policy:
 

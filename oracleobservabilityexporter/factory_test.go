@@ -66,13 +66,18 @@ func TestQueueStorageDefaults(t *testing.T) {
 		{"omitted", map[string]any{}, "file_storage", true},
 		{"partial queue", map[string]any{"sending_queue": map[string]any{"queue_size": 42}}, "file_storage", true},
 		{"custom storage", map[string]any{"sending_queue": map[string]any{"storage": "file_storage/custom"}}, "file_storage/custom", true},
+		{"in memory", map[string]any{"sending_queue": map[string]any{"storage": ""}}, "", true},
+		{"in memory explicitly enabled", map[string]any{"sending_queue": map[string]any{"enabled": true, "storage": ""}}, "", true},
+		{"in memory disabled", map[string]any{"sending_queue": map[string]any{"enabled": false, "storage": ""}}, "", false},
 		{"disabled", map[string]any{"sending_queue": map[string]any{"enabled": false}}, "", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := createDefaultConfig().(*Config)
 			require.NoError(t, confmap.NewFromStringMap(tc.values).Unmarshal(cfg))
 			require.Equal(t, tc.enabled, cfg.QueueConfig.HasValue())
-			if tc.enabled {
+			if tc.enabled && tc.storage == "" {
+				require.Nil(t, cfg.QueueConfig.Get().StorageID)
+			} else if tc.enabled {
 				require.NotNil(t, cfg.QueueConfig.Get().StorageID)
 				assert.Equal(t, tc.storage, cfg.QueueConfig.Get().StorageID.String())
 			}
@@ -92,6 +97,37 @@ func TestDefaultQueueRequiresStorageExtension(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, exp.Shutdown(context.Background())) })
 	require.ErrorContains(t, exp.Start(context.Background(), componenttest.NewNopHost()), "no storage client extension found")
+}
+
+func TestInMemoryQueueStartsWithoutStorageExtension(t *testing.T) {
+	cfg := createDefaultConfig().(*Config)
+	conf := confmap.NewFromStringMap(map[string]any{
+		"namespace": "test-namespace", "log_group_id": "test-log-group",
+		"sending_queue": map[string]any{"storage": "", "queue_size": 42, "num_consumers": 2},
+	})
+	require.NoError(t, conf.Unmarshal(cfg))
+	require.NoError(t, cfg.Validate())
+	require.True(t, cfg.QueueConfig.HasValue())
+	require.Nil(t, cfg.QueueConfig.Get().StorageID)
+	assert.EqualValues(t, 42, cfg.QueueConfig.Get().QueueSize)
+	assert.Equal(t, 2, cfg.QueueConfig.Get().NumConsumers)
+	assert.True(t, cfg.QueueConfig.Get().BlockOnOverflow)
+	assert.Equal(t, "", conf.Get("sending_queue::storage"))
+	exp, err := createLogsExporter(context.Background(), exportertest.NewNopSettings(metadata.Type), cfg)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, exp.Shutdown(context.Background())) })
+	require.NoError(t, exp.Start(context.Background(), componenttest.NewNopHost()))
+}
+
+func TestQueueStorageInvalidConfig(t *testing.T) {
+	for _, queue := range []map[string]any{
+		{"storage": " "},
+		{"storage": "/invalid"},
+		{"storage": "", "unknown_field": true},
+	} {
+		cfg := createDefaultConfig().(*Config)
+		require.Error(t, confmap.NewFromStringMap(map[string]any{"sending_queue": queue}).Unmarshal(cfg))
+	}
 }
 
 func TestCreateLogsExporterError(t *testing.T) {

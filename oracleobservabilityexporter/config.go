@@ -12,6 +12,7 @@ import (
 	"go.opentelemetry.io/collector/config/configopaque"
 	"go.opentelemetry.io/collector/config/configoptional"
 	"go.opentelemetry.io/collector/config/configretry"
+	"go.opentelemetry.io/collector/confmap"
 	"go.opentelemetry.io/collector/exporter/exporterhelper"
 )
 
@@ -74,6 +75,28 @@ type Config struct {
 
 // Validate checks if the exporter configuration is valid
 var _ component.Config = (*Config)(nil)
+
+// Unmarshal preserves persistent storage by default and allows an explicit
+// empty storage string to select an enabled in-memory queue.
+func (cfg *Config) Unmarshal(conf *confmap.Conf) error {
+	values := conf.ToStringMap()
+	queue, _ := values["sending_queue"].(map[string]any)
+	storage, isString := queue["storage"].(string)
+	inMemory := isString && storage == ""
+	if inMemory {
+		// component.ID rejects empty strings; decode the remaining queue settings
+		// normally, then select exporterhelper's in-memory backend with a nil ID.
+		delete(queue, "storage")
+	}
+	type plainConfig Config
+	if err := confmap.NewFromStringMap(values).Unmarshal((*plainConfig)(cfg)); err != nil {
+		return err
+	}
+	if inMemory && cfg.QueueConfig.HasValue() {
+		cfg.QueueConfig.Get().StorageID = nil
+	}
+	return nil
+}
 
 func isOciConfigUsed(ociConfiguration OciConfig) bool {
 	if ociConfiguration.FingerPrint != "" || ociConfiguration.PrivateKey != "" || ociConfiguration.Region != "" ||

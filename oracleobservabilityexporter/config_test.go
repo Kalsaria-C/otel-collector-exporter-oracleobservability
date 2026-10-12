@@ -24,6 +24,19 @@ var (
 	oracleobservability = component.MustNewType("oracleobservability")
 )
 
+func TestLoadInMemoryConfig(t *testing.T) {
+	cm, err := confmaptest.LoadConf(filepath.Join("testdata", "config-in-memory.yaml"))
+	require.NoError(t, err)
+	cfg := createDefaultConfig().(*Config)
+	require.NoError(t, cm.Unmarshal(cfg))
+	require.NoError(t, confmap.Validate(cfg))
+	require.True(t, cfg.QueueConfig.HasValue())
+	require.Nil(t, cfg.QueueConfig.Get().StorageID)
+	assert.EqualValues(t, 42, cfg.QueueConfig.Get().QueueSize)
+	assert.Equal(t, 2, cfg.QueueConfig.Get().NumConsumers)
+	assert.True(t, cfg.BackOffConfig.Enabled)
+}
+
 func TestLoadConfig(t *testing.T) {
 	t.Parallel()
 
