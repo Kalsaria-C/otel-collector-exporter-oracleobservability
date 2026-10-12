@@ -42,7 +42,7 @@ use these versions.
 
 To use this exporter, you need:
 
-- Go `1.27.1` or later to build exporter and Collector version `v0.162.0`.
+- Go `1.27.2` or later to build exporter and Collector version `v0.162.0`.
   Go is not needed on a host that only runs the compiled binary.
 - OpenTelemetry Collector Builder (`ocb`) for your target Collector version.
 - Access to OCI Log Analytics.
