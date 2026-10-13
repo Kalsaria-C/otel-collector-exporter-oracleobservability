@@ -78,20 +78,49 @@ var _ component.Config = (*Config)(nil)
 
 // Unmarshal preserves persistent storage by default and allows an explicit
 // empty storage string to select an enabled in-memory queue.
+// The Collector's confmap decoder discovers this method through the
+// confmap.Unmarshaler interface when loading configuration, including validate.
+// It is not called per upload. The factory has already populated cfg with
+// defaults; conf contains the customer's settings that override those defaults.
 func (cfg *Config) Unmarshal(conf *confmap.Conf) error {
+	// Work on a map copy, not the customer's YAML or the original Conf. queue is
+	// the nested settings map within values, not the runtime queue holding logs.
 	values := conf.ToStringMap()
 	queue, _ := values["sending_queue"].(map[string]any)
+	// A missing/non-map queue yields a nil map, which is safe to read. Require
+	// an actual empty string so omission is not mistaken for an in-memory opt-in.
+	// Whitespace and other invalid values still go through normal decoding.
 	storage, isString := queue["storage"].(string)
 	inMemory := isString && storage == ""
 	if inMemory {
-		// component.ID rejects empty strings; decode the remaining queue settings
-		// normally, then select exporterhelper's in-memory backend with a nil ID.
+		// component.ID rejects "". Without removing it, decoding below returns
+		// an error before we can set StorageID to nil. Removing the nested key
+		// also removes it from values, but does NOT clear cfg's file_storage
+		// default. Remember the opt-in in inMemory and clear that default later.
 		delete(queue, "storage")
 	}
+	// This defined type retains Config's fields/tags but not its methods. It is
+	// deliberately not an alias (type plainConfig = Config), which would retain
+	// Unmarshal.
 	type plainConfig Config
-	if err := confmap.NewFromStringMap(values).Unmarshal((*plainConfig)(cfg)); err != nil {
+
+	// ToStringMap converted conf into an editable map; NewFromStringMap converts
+	// that edited map back into a configuration object. The original conf still
+	// contains storage: "" when supplied, so decoding it (or calling ToStringMap
+	// on it again) would lose our deletion and cause the empty-ID error.
+	inputConfig := confmap.NewFromStringMap(values)
+
+	// Apply the edited settings to cfg. Creating inputConfig above does not
+	// update cfg; this decoding step does, using the existing field tags.
+	err := inputConfig.Unmarshal((*plainConfig)(cfg))
+	if err != nil {
 		return err
 	}
+	// exporterhelper selects its existing in-memory backend for a nil StorageID.
+	// HasValue respects enabled:false; we must not re-enable a disabled queue.
+	// Queue size, consumers and retry settings are unchanged by this assignment.
+	// When storage is omitted, retain the factory's persistent-storage default;
+	// missing storage extensions must fail startup rather than fall back to RAM.
 	if inMemory && cfg.QueueConfig.HasValue() {
 		cfg.QueueConfig.Get().StorageID = nil
 	}
